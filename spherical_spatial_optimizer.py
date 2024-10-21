@@ -1,7 +1,8 @@
 import pygame
+import pygame.gfxdraw
 import random
+import timeit
 from typing import Union, Dict, List, Tuple
-
 
 # Pastel color palette
 PASTEL_COLORS = [
@@ -14,8 +15,6 @@ PASTEL_COLORS = [
     (204, 204, 255),  # Light Purple
     (229, 204, 255)   # Light Magenta
 ]
-
-NUM_POINTS=2
 
 TOROIDAL_OFFSETS=[
     (0,0),
@@ -35,9 +34,6 @@ RENDER_TOROIDAL_OFFSETS=[
     (-1,1),
     (-1,-1),
 ]
-
-
-## TODO: For the case of two nodes, how can I compute the 4 key points?
 
 # Define a Node with attributes for position and color
 class Node:
@@ -60,6 +56,17 @@ class Node:
     @y.setter
     def y(self, value):
         self.pos[1] = value
+
+NUM_POINTS=5
+points = []
+# Fill in random x/y points in the range (0, 1)
+for i in range(NUM_POINTS):
+    x = random.uniform(0, 1)
+    y = random.uniform(0, 1)
+    color = random.choice(PASTEL_COLORS)
+    node = Node((x,y), color)
+    node.motion = (random.uniform(-0.01, 0.01), random.uniform(-0.01, 0.01))
+    points.append(node)
 
 # Normalize to range [0,1)
 def normalize(a: Union[float, Tuple[float, float]]):
@@ -88,15 +95,11 @@ def denormalize(a: Node, b: Union[Tuple[float, float], List[Tuple[float, float]]
     offset = lambda x : add_pos(x, (0.5 - a.x, 0.5 - a.y))
     unoffset = lambda x : add_pos(x, (a.x - 0.5, a.y - 0.5))
     return unoffset(normalize(offset(b)))
-    
+
+# Gemini code
 def perpendicular_point(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> Tuple[float, float]:
     """
     Finds the intersection point of two lines perpendicular to AB and AC, respectively, passing through points B and C.
-
-    Args:
-        a: Coordinates of point A.
-        b: Coordinates of point B.
-        c: Coordinates of point C.
 
     Returns:
         The coordinates of the intersection point.
@@ -123,18 +126,6 @@ def perpendicular_point(a: Tuple[float, float], b: Tuple[float, float], c: Tuple
     y = slope_perp_b * x + line_b_eq
 
     return x, y
-
-
-points = []
-# Fill in 100 random x/y points in the range (0, 1)
-for i in range(NUM_POINTS):
-    x = random.uniform(0, 1)
-    y = random.uniform(0, 1)
-    color = random.choice(PASTEL_COLORS)
-    node = Node((x,y), color)
-    node.motion = (random.uniform(-0.01, 0.01), random.uniform(-0.01, 0.01))
-    points.append(node)
-
 
 # Compute the region closest to the given point. Output will be a convex hull. 
 def compute_dominated_region(points: List[Dict], index: int) -> List[Tuple[int, int]]:
@@ -165,16 +156,96 @@ def distance(a: Union[Tuple[float, float], Node], b: Union[Tuple[float, float], 
     real_dy = min(dy, 1 - dy)
     return (real_dx**2 + real_dy**2)**0.5
 
-def simulate():
+def simulate(time):
     for point in points:
-        point.pos = (normalize(point.x + point.motion[0]), normalize(point.y + point.motion[1]))
+        point.pos = (normalize(point.x + point.motion[0] * time), normalize(point.y + point.motion[1] * time))
 
-#TODO better clipping
+def reverse_lerp(a: float, b: float, value: float) -> float:
+    if a == b:
+        return 0.5
+    return (value - a) / (b - a)
+assert(reverse_lerp(1, 5, 3) == 0.5)
+assert(reverse_lerp(1, 5, 2) == 0.25)
+
+
+def lerp(a: float, b: float, value: float) -> float:
+    return a * (1 - value) + b * value
+assert(lerp(1, 5, 0.5) == 3)
+assert(lerp(1, 5, 0.25) == 2)
+
 def clip_polygon(polygon: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-    BOUND = 3
-    limit = lambda point : (max(-BOUND, min(BOUND, point[0])), max(-BOUND, min(BOUND, point[1])))
-    return [limit(point) for point in polygon]
 
+    # Clip to x >= 0
+    in_bounds = lambda p : 0 <= p[0]
+    project = lambda p_a, p_b : (0, lerp(p_a[1], p_b[1], reverse_lerp(p_a[0], p_b[0], 0)))
+    result = []
+    for idx in range(len(polygon)):
+        a = polygon[idx - 1]
+        b = polygon[idx]
+
+        a_in = in_bounds(a)
+        b_in = in_bounds(b)
+        if (a_in and not b_in) or (b_in and not a_in):
+            result.append(project(a, b))
+
+        if in_bounds(b):
+            result.append(b)
+    polygon = result
+
+    # Clip to x <= 1
+    in_bounds = lambda p : p[0] <= 1
+    project = lambda p_a, p_b : (1, lerp(p_a[1], p_b[1], reverse_lerp(p_a[0], p_b[0], 1)))
+    result = []
+    for idx in range(len(polygon)):
+        a = polygon[idx - 1]
+        b = polygon[idx]
+
+        a_in = in_bounds(a)
+        b_in = in_bounds(b)
+        if (a_in and not b_in) or (b_in and not a_in):
+            result.append(project(a, b))
+
+        if in_bounds(b):
+            result.append(b)
+    polygon = result
+
+    # Clip to y >= 0
+    in_bounds = lambda p : 0 <= p[1]
+    project = lambda p_a, p_b : (lerp(p_a[0], p_b[0], reverse_lerp(p_a[1], p_b[1], 0)), 0)
+    result = []
+    for idx in range(len(polygon)):
+        a = polygon[idx - 1]
+        b = polygon[idx]
+
+        a_in = in_bounds(a)
+        b_in = in_bounds(b)
+        if (a_in and not b_in) or (b_in and not a_in):
+            result.append(project(a, b))
+
+        if in_bounds(b):
+            result.append(b)
+    polygon = result
+
+    # Clip to y <= 1
+    in_bounds = lambda p : p[0] <= 1
+    project = lambda p_a, p_b : (lerp(p_a[0], p_b[0], reverse_lerp(p_a[1], p_b[1], 1)), 1)
+    result = []
+    for idx in range(len(polygon)):
+        a = polygon[idx - 1]
+        b = polygon[idx]
+
+        a_in = in_bounds(a)
+        b_in = in_bounds(b)
+        if (a_in and not b_in) or (b_in and not a_in):
+            result.append(project(a, b))
+
+        if in_bounds(b):
+            result.append(b)
+    polygon = result
+
+    return polygon
+
+simtoggle = True
 # Main render function
 def render(surface):
     size = min(surface.get_width(), surface.get_height())
@@ -184,6 +255,22 @@ def render(surface):
         if isinstance(a, Node):
             return (a.x * size, a.y * size)
         return (a[0] * size, a[1] * size)
+
+    first_midpoints = midpoints(points[0], points[1])
+
+    make_perpendicular = lambda node, a, b : perpendicular_point(node.pos, denormalize(node, a), denormalize(node, b))
+    perpendiculars = [
+        make_perpendicular(points[0], first_midpoints[0], first_midpoints[1]),
+        make_perpendicular(points[0], first_midpoints[1], first_midpoints[2]),
+        make_perpendicular(points[0], first_midpoints[2], first_midpoints[3]),
+        make_perpendicular(points[0], first_midpoints[3], first_midpoints[0]),
+    ]
+
+    # Render polygons
+    for offset in RENDER_TOROIDAL_OFFSETS:
+        polygon = clip_polygon([add_pos(point, offset) for point in perpendiculars])
+        if 3 <= len(polygon):
+            pygame.gfxdraw.filled_polygon(surface, [surface_pos(point) for point in polygon], points[0].color)
 
     # # Color to the nearest point for each pixel
     # for x in range(1, size, 5):
@@ -195,20 +282,7 @@ def render(surface):
     #                 nearest = point
     #         pygame.draw.rect(surface, nearest.color, (x, y, 4, 4))
     
-    first_midpoints = midpoints(points[0], points[1])
-
-    make_perpendicular = lambda node, a, b : perpendicular_point(node.pos, denormalize(node, a), denormalize(node, b))
-    perpendiculars = [
-        make_perpendicular(points[0], first_midpoints[0], first_midpoints[1]),
-        make_perpendicular(points[0], first_midpoints[1], first_midpoints[2]),
-        make_perpendicular(points[0], first_midpoints[2], first_midpoints[3]),
-        make_perpendicular(points[0], first_midpoints[3], first_midpoints[0]),
-    ]
-
-    for offset in RENDER_TOROIDAL_OFFSETS:
-        polygon = clip_polygon([add_pos(point, offset) for point in perpendiculars])
-        pygame.draw.polygon(surface, points[0].color, [surface_pos(point) for point in polygon])
-
+    # Draw lines from point 0 to midpoints
     for end_point in denormalize(points[0], first_midpoints):
         for offset in RENDER_TOROIDAL_OFFSETS:
             pygame.draw.line(surface, (255, 255, 255), surface_pos(add_pos(points[0].pos, offset)), surface_pos(add_pos(end_point, offset)), 2)
@@ -218,19 +292,16 @@ def render(surface):
         pygame.draw.circle(surface, (0,0,0), surface_pos(point), 10)
         pygame.draw.circle(surface, point.color, surface_pos(point), 6)
     
-    
     # # Draw midpoints between points[0] and points[1]
     # for midpoint in first_midpoints:
     #     pygame.draw.circle(surface, (255, 255, 255), surface_pos(midpoint), 4)
-    
-    # Draw a polygon
-    # test_poly = [(0.5, 0.5), (0.7, 0.7), (0.5, 0.7), (0.7, 0.5)]
-    # pygame.draw.polygon(surface, (255, 255, 255), [surface_pos(point) for point in test_poly])
-    
+
     pygame.display.flip()
 
+last_auto_tick = pygame.time.get_ticks()
 simtoggle = True
-quadtoggle = True
+revsersetoggle = False
+quadtoggle = False
 while running:
 
     for event in pygame.event.get():
@@ -249,27 +320,43 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-        # Flip simtoggle if the user presses spacebar
         if event.type == pygame.KEYDOWN:
+            # Flip simtoggle if the user presses spacebar
             if event.key == pygame.K_SPACE:
                 simtoggle = not simtoggle
             if event.key == pygame.K_0:
                 quadtoggle = not quadtoggle
+            if event.key == pygame.K_1:
+                revsersetoggle = not revsersetoggle
+            if event.key == pygame.K_ESCAPE:
+                running = False
+        
+        # Quit if we lost focus
+        if event.type == pygame.ACTIVEEVENT:
+            if event.state & 1 == 1 and event.gain == 0:
+                running = False
 
-    if simtoggle:
-        simulate()
+    if simtoggle:        
+        if last_auto_tick + 20 < pygame.time.get_ticks():
+            last_auto_tick = pygame.time.get_ticks()
+            if revsersetoggle: 
+                simulate(-0.5)
+            else:
+                simulate(0.5)
 
     if quadtoggle:
         size = min(screen.get_width(), screen.get_height()) / 2
         draw_plane = pygame.Surface((size, size))
         render(draw_plane)
         # Draw 4 copies of surface to screen
+        screen.fill((40, 40, 40))
         screen.blit(draw_plane, (0, 0))
         screen.blit(draw_plane, (size + 1, 0))
         screen.blit(draw_plane, (0, size + 1))
         screen.blit(draw_plane, (size + 1, size + 1))
     else:
         render(screen)
+    pygame.display.flip()
     
 
     
