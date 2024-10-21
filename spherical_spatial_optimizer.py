@@ -244,10 +244,6 @@ def distance(a: Union[Point, Node], b: Union[Point, Node]):
     real_dy = min(dy, 1 - dy)
     return (real_dx**2 + real_dy**2)**0.5
 
-def simulate(render_points):
-    for point in render_points:
-        point.pos = (normalize(point.x + point.motion[0]), normalize(point.y + point.motion[1]))
-
 def clip_polygon(polygon: List[Point]) -> List[Point]:
 
     # Clip to x >= 0
@@ -366,6 +362,11 @@ def render(surface, render_points):
     # for midpoint in first_midpoints:
     #     pygame.draw.circle(surface, (255, 255, 255), surface_pos(midpoint), 4)
 
+def simulate(render_points):
+    SPEED = 0.25
+    for point in render_points:
+        point.pos = (normalize(point.x + point.motion[0] * SPEED), normalize(point.y + point.motion[1] * SPEED))
+
 def main():
     global g_processing_pool
     g_processing_pool = multiprocessing.Pool(processes=8)
@@ -379,7 +380,7 @@ def main():
         y = random.uniform(0, 1)
         color = random.choice(PASTEL_COLORS)
         node = Node((x,y), color)
-        node.motion = (random.uniform(-0.005, 0.005), random.uniform(-0.005, 0.005))
+        node.motion = (random.uniform(-0.01, 0.01), random.uniform(-0.01, 0.01))
         render_points.append(node)
 
 
