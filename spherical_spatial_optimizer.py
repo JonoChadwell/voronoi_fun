@@ -73,6 +73,8 @@ def scale(a: Point, scalar: float):
     return (a[0] * scalar, a[1] * scalar)
 
 def unitize(a: Point) -> Point:
+    if a == (0.0, 0.0):
+        return (0.0, 0.0)
     return scale(a, 1 / magnitude(a))
 
 # Define a Node with attributes for position and color
@@ -109,11 +111,12 @@ def add_pos(a: Point, b: Point, *, normalize=False):
         return normalize(result)
     return result
 
+def avg_pos(a: Point, b: Point):
+    return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+
 # Return the four midpoints of a and b in toroidal space
-def midpoints(a: Node, b: Node) -> List[Point]:
-    def avg(a, b):
-        return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-    return [normalize(avg(a.pos, add_pos(b.pos, x))) for x in TOROIDAL_OFFSETS]
+def midpoints(a: Node, b: Node) -> List[Point]:        
+    return [normalize(avg_pos(a.pos, add_pos(b.pos, x))) for x in TOROIDAL_OFFSETS]
 
 # Re-orient `b` such that each instance uses the closest option to `a` in
 # torioidal space.
@@ -320,7 +323,7 @@ def clip_polygon(polygon: List[Point]) -> List[Point]:
 g_processing_pool = None
 
 def compute_one_region(idx: int, render_points):
-    return compute_dominated_region(render_points, idx, wall_thickness=0.002)
+    return compute_dominated_region(render_points, idx, wall_thickness=0.0025)
 
 def compute_regions_parallel(render_points):
     regions = g_processing_pool.map(partial(compute_one_region, render_points=render_points), range(len(render_points)), chunksize=10)
@@ -362,10 +365,54 @@ def render(surface, render_points):
     # for midpoint in first_midpoints:
     #     pygame.draw.circle(surface, (255, 255, 255), surface_pos(midpoint), 4)
 
+# Effects of motion:
+#
+# Rotational:
+#  - the angle of each poly-side changes as the node moves
+#
+# Linear Growth:
+#  - Each poly-side moves as the node moves
+#
+# Angular Growth:
+#  - Each poly-side grows/shrinks as the node moves
+#
+# This implementation assumes linear growth dominates.
+def best_direction(idx: int, render_points) -> Point:
+    node = render_points[idx]
+    if g_regions is None:
+        return (0.0, 0.0)
+    polygon = g_regions[idx]
+
+    result = (0.0, 0.0)
+    for idx in range(len(polygon)):
+        a = polygon[idx - 1]
+        b = polygon[idx]
+        direction = unitize(vector(origin=node.pos, dest=avg_pos(a,b)))
+        impact = magnitude(vector(origin=a, dest=b))
+        result = add_pos(result, scale(direction, impact))
+
+    return result
+
 def simulate(render_points):
     SPEED = 0.25
-    for point in render_points:
-        point.pos = (normalize(point.x + point.motion[0] * SPEED), normalize(point.y + point.motion[1] * SPEED))
+    for i, point in enumerate(render_points):
+        motion = point.motion
+        if point.motion_type == 'static':
+            continue
+        if point.motion_type == 'linear':
+            pass
+        if point.motion_type == 'optimize_fast':
+            motion = scale(best_direction(i, render_points), 0.4)
+        if point.motion_type == 'optimize_slow':
+            motion = scale(best_direction(i, render_points), 0.1)
+        if point.motion_type == 'optimize_momentum':
+            MOMENTUM = 8
+            desire = unitize(best_direction(i, render_points))
+            motion = add_pos(scale(unitize(motion), MOMENTUM), desire)
+            motion = scale(motion, 0.01 / (MOMENTUM + 1))
+        point.motion = motion
+        motion = (motion[0] + 0.005, motion[1] + 0.002)
+        point.pos = (normalize(point.x + motion[0] * SPEED), normalize(point.y + motion[1] * SPEED))
 
 def main():
     global g_processing_pool
@@ -380,9 +427,12 @@ def main():
         y = random.uniform(0, 1)
         color = random.choice(PASTEL_COLORS)
         node = Node((x,y), color)
-        node.motion = (random.uniform(-0.01, 0.01), random.uniform(-0.01, 0.01))
+        # node.motion_type = random.choice(['static','linear','optimize_slow','optimize_momentum'])
+        node.motion_type = 'optimize_momentum'
+        node.motion = (0.0,0.0)
+        if node.motion_type == 'linear':
+            node.motion = (random.uniform(-0.01, 0.01), random.uniform(-0.01, 0.01))
         render_points.append(node)
-
 
     pygame.init()
     screen = pygame.display.set_mode((1200, 1200))
